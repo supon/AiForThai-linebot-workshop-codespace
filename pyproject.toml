@@ -1,0 +1,17 @@
+[project]
+name = "aiforthai-linebot-workshop"
+version = "0.1.0"
+description = "FastAPI for AI For Thai linebot workshop"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aift~=1.3.2",
+    "fastapi[standard]~=0.115.12",
+    "line-bot-sdk~=3.16.0",
+    "pydantic-settings~=2.9.1",
+    "uvicorn[standard]~=0.34.2",
+]
+
+[tool.ruff]
+line-length = 100
+
