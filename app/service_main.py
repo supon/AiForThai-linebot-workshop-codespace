@@ -4,11 +4,11 @@ from datetime import datetime
 
 import ffmpeg
 from aift import setting
-from aift.multimodal import audioqa, textqa
+from aift.multimodal import audioqa, textqa, vqa
 from fastapi import APIRouter, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import AudioMessage, MessageEvent, TextMessage, TextSendMessage
+from linebot.models import AudioMessage, ImageMessage, MessageEvent, TextMessage, TextSendMessage
 
 from app.configs import Configs
 
@@ -20,9 +20,15 @@ setting.set_api_key(cfg.AIFORTHAI_APIKEY)  # AIFORTHAI_APIKEY
 line_bot_api = LineBotApi(cfg.LINE_CHANNEL_ACCESS_TOKEN)  # CHANNEL_ACCESS_TOKEN
 handler = WebhookHandler(cfg.LINE_CHANNEL_SECRET)  # CHANNEL_SECRET
 
-text_from_audio = []
-text_for_audio_append = "คุณต้องการให้ฉันทำอะไรกับเสียงนี้ ?\n\nยกเลิกให้พิมพ์ /cancel หรือ /ยกเลิก"
+text_for_audio_append = (
+    "คุณต้องการให้ฉันทำอะไรกับเสียงนี้ ? รับเฉพาะข้อความเท่านั้น\n\nยกเลิกให้พิมพ์ /cancel หรือ /ยกเลิก"
+)
 mp3_file = []
+
+text_for_visual_append = (
+    "คุณต้องการให้ฉันทำอะไรกับภาพนี้ ? รับเฉพาะข้อความเท่านั้น\n\nยกเลิกให้พิมพ์ /cancel หรือ /ยกเลิก"
+)
+image_file = []
 
 
 @router.post("")
@@ -50,17 +56,22 @@ async def multimodal_demo(request: Request):
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
-    print("mp3_file", mp3_file)
     user_text = event.message.text.strip()
+    text = None
     res = None
 
-    # ถ้า user ส่ง /cancel หรือ /ยกเลิก ให้ reset mp3_file
+    # ถ้า user ส่ง /cancel หรือ /ยกเลิก ให้ reset mp3_file และ image_file
     if user_text in ["/cancel", "/ยกเลิก"]:
         # ลบไฟล์ mp3 ทั้งหมดที่ค้างอยู่
         for mp3_path in mp3_file:
             if os.path.exists(mp3_path):
                 os.remove(mp3_path)
         mp3_file.clear()
+        # ลบไฟล์รูปทั้งหมดที่ค้างอยู่
+        for img_path in image_file:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        image_file.clear()
         send_message(event, "ล้างความจำก่อนหน้านี้แล้ว")
         return
 
@@ -72,6 +83,16 @@ def handle_text_message(event):
             user_text,
             return_json=True,
         )
+
+    # ถ้ามีรูปใน image_file ให้ประมวลผล vqa.generate
+    elif len(image_file) > 0:
+        img_path = image_file[0]
+        res = vqa.generate(
+            img_path,
+            user_text,
+            return_json=True,
+        )
+
     else:
         current_time = datetime.now()
         # extract day, month, hour, and minute
@@ -82,22 +103,14 @@ def handle_text_message(event):
         result = f"{day:02}{month:02}{hour:02}{adjusted_minute:02}"
         res = textqa.chat(user_text, result + cfg.AIFORTHAI_APIKEY, temperature=0.6)
 
-    if res and "content" in res and len(res["content"]) > 0:
+    if res and "content" in res and res["content"]:
         text = res["content"] if isinstance(res["content"], str) else res["content"][0]
+    elif res and "response" in res:
+        text = res["response"] if isinstance(res["response"], str) else res["response"][0]
     else:
         text = "ไม่สามารถประมวลผลข้อความนี้ได้"
 
-    print("text", text)
     send_message(event, text)
-
-
-def echo(event):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=event.message.text))
-
-
-# function for sending message
-def send_message(event, message):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
 
 
 @handler.add(MessageEvent, message=AudioMessage)
@@ -135,3 +148,37 @@ def handle_voice_message(event):
             os.remove(tmp_in_path)
         if os.path.exists(tmp_out_path):
             os.remove(tmp_out_path)
+
+
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image_message(event):
+    message_id = event.message.id
+    image_content = line_bot_api.get_message_content(message_id)
+
+    suffix = ".jpg"
+
+    if event.message.content_provider.type == "external":
+        url = event.message.content_provider.original_content_url
+        ext = os.path.splitext(url)[1]
+        suffix = ext if ext else ".img"
+
+    # สร้างไฟล์ชั่วคราวเพื่อเก็บรูป
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_img:
+        for chunk in image_content.iter_content():
+            tmp_img.write(chunk)
+        tmp_img_path = tmp_img.name
+
+    # เก็บ path ของรูปไว้ใน array
+    image_file.append(tmp_img_path)
+
+    # ส่งข้อความแจ้ง user
+    send_message(event, text_for_visual_append)
+
+
+def echo(event):
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=event.message.text))
+
+
+# function for sending message
+def send_message(event, message):
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
