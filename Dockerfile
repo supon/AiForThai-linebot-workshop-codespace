@@ -20,17 +20,18 @@ RUN sed --in-place '/en_US.UTF-8/s/^#//' /etc/locale.gen  \
     && locale-gen
 
 # Install ffmpeg static build
+
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in \
-        x86_64) FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" ;; \
-        aarch64) FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" ;; \
+        x86_64) FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n7.1-latest-linux64-lgpl-7.1.tar.xz" ;; \
+        aarch64) FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n7.1-latest-linuxarm64-lgpl-7.1.tar.xz" ;; \
         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac \
     && curl -L "$FFMPEG_URL" | tar -xJ \
-    && cp ffmpeg-*-static/ffmpeg /usr/local/bin/ \
-    && cp ffmpeg-*-static/ffprobe /usr/local/bin/ \
+    && cp ffmpeg-*-latest-linux*/bin/ffmpeg /usr/local/bin/ \
+    && cp ffmpeg-*-latest-linux*/bin/ffprobe /usr/local/bin/ \
     && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
-    && rm -rf ffmpeg-*-static
+    && rm -rf ffmpeg-*-latest-linux*/bin
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
