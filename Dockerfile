@@ -6,15 +6,31 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt update \
     && apt install -y --no-install-recommends \
+        curl \
+        git \
         locales \
         sudo \
-        git \
+        tar \
+        xz-utils \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
 
 RUN sed --in-place '/en_US.UTF-8/s/^#//' /etc/locale.gen  \
     &&  sed --in-place '/th_TH.UTF-8/s/^#//' /etc/locale.gen \
     && locale-gen
+
+# Install ffmpeg static build
+RUN ARCH=$(uname -m) \
+    && case "$ARCH" in \
+        x86_64) FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" ;; \
+        aarch64) FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac \
+    && curl -L "$FFMPEG_URL" | tar -xJ \
+    && cp ffmpeg-*-static/ffmpeg /usr/local/bin/ \
+    && cp ffmpeg-*-static/ffprobe /usr/local/bin/ \
+    && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+    && rm -rf ffmpeg-*-static
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
