@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Request
+import os
+import tempfile
+from datetime import datetime
 
+import ffmpeg
+from aift import setting
+from aift.multimodal import audioqa, textqa
+from fastapi import APIRouter, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
-
-from aift import setting
-from aift.multimodal import textqa
-
-from datetime import datetime
+from linebot.models import AudioMessage, MessageEvent, TextMessage, TextSendMessage
 
 from app.configs import Configs
 
@@ -15,9 +16,13 @@ router = APIRouter(tags=["Main"], prefix="/message")
 
 cfg = Configs()
 
-setting.set_api_key(cfg.AIFORTHAI_APIKEY) # AIFORTHAI_APIKEY
+setting.set_api_key(cfg.AIFORTHAI_APIKEY)  # AIFORTHAI_APIKEY
 line_bot_api = LineBotApi(cfg.LINE_CHANNEL_ACCESS_TOKEN)  # CHANNEL_ACCESS_TOKEN
 handler = WebhookHandler(cfg.LINE_CHANNEL_SECRET)  # CHANNEL_SECRET
+
+text_from_audio = []
+text_for_audio_append = "คุณต้องการให้ฉันทำอะไรกับเสียงนี้ ?\n\nยกเลิกให้พิมพ์ /cancel หรือ /ยกเลิก"
+mp3_file = []
 
 
 @router.post("")
@@ -39,38 +44,94 @@ async def multimodal_demo(request: Request):
     try:
         handler.handle(body.decode("UTF-8"), signature)
     except InvalidSignatureError:
-        print(
-            "Invalid signature. Please check your channel access token or channel secret."
-        )
+        print("Invalid signature. Please check your channel access token or channel secret.")
     return "OK"
 
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
-    # session id
-    current_time = datetime.now()
-    # extract day, month, hour, and minute
-    day, month = current_time.day, current_time.month
-    hour, minute = current_time.hour, current_time.minute
-    # adjust the minute to the nearest lower number divisible by 10
-    adjusted_minute = minute - (minute % 10)
-    result = f"{day:02}{month:02}{hour:02}{adjusted_minute:02}"
+    print("mp3_file", mp3_file)
+    user_text = event.message.text.strip()
+    res = None
 
-    # aiforthai multimodal chat
-    text = textqa.chat(
-        event.message.text, result + cfg.AIFORTHAI_APIKEY, temperature=0.6, context=""
-    )["response"]
+    # ถ้า user ส่ง /cancel หรือ /ยกเลิก ให้ reset mp3_file
+    if user_text in ["/cancel", "/ยกเลิก"]:
+        # ลบไฟล์ mp3 ทั้งหมดที่ค้างอยู่
+        for mp3_path in mp3_file:
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+        mp3_file.clear()
+        send_message(event, "ล้างความจำก่อนหน้านี้แล้ว")
+        return
 
-    # return text response
+    # ถ้ามี mp3 ใน mp3_file ให้ประมวลผล audioqa.generate
+    if len(mp3_file) > 0:
+        mp3_path = mp3_file[0]
+        res = audioqa.generate(
+            mp3_path,
+            user_text,
+            return_json=True,
+        )
+    else:
+        current_time = datetime.now()
+        # extract day, month, hour, and minute
+        day, month = current_time.day, current_time.month
+        hour, minute = current_time.hour, current_time.minute
+        # adjust the minute to the nearest lower number divisible by 10
+        adjusted_minute = minute - (minute % 10)
+        result = f"{day:02}{month:02}{hour:02}{adjusted_minute:02}"
+        res = textqa.chat(user_text, result + cfg.AIFORTHAI_APIKEY, temperature=0.6)
+
+    if res and "content" in res and len(res["content"]) > 0:
+        text = res["content"] if isinstance(res["content"], str) else res["content"][0]
+    else:
+        text = "ไม่สามารถประมวลผลข้อความนี้ได้"
+
+    print("text", text)
     send_message(event, text)
 
 
 def echo(event):
-    line_bot_api.reply_message(
-        event.reply_token, TextSendMessage(text=event.message.text)
-    )
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=event.message.text))
 
 
 # function for sending message
 def send_message(event, message):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
+
+
+@handler.add(MessageEvent, message=AudioMessage)
+def handle_voice_message(event):
+    message_content = line_bot_api.get_message_content(event.message.id)
+
+    # Save the incoming audio (m4a) to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp_in:
+        for chunk in message_content.iter_content():
+            tmp_in.write(chunk)
+        tmp_in_path = tmp_in.name
+
+    # Prepare a temporary file for the mp3 output
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_out:
+        tmp_out_path = tmp_out.name
+
+    try:
+        # Convert m4a to mp3 using ffmpeg-python
+        (
+            ffmpeg.input(tmp_in_path)
+            .output(tmp_out_path, format="mp3", acodec="libmp3lame")
+            .run(quiet=True, overwrite_output=True)
+        )
+        # ลบไฟล์ต้นฉบับ m4a
+        if os.path.exists(tmp_in_path):
+            os.remove(tmp_in_path)
+        # เก็บ path mp3 ไว้ใน array
+        mp3_file.append(tmp_out_path)
+        # ส่งข้อความแจ้ง user
+        send_message(event, text_for_audio_append)
+    except Exception as e:
+        send_message(event, f"เกิดข้อผิดพลาดในการแปลงไฟล์เสียง: {e}")
+        # ลบไฟล์หากมีปัญหา
+        if os.path.exists(tmp_in_path):
+            os.remove(tmp_in_path)
+        if os.path.exists(tmp_out_path):
+            os.remove(tmp_out_path)
