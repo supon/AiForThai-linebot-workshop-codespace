@@ -90,14 +90,16 @@
         }
       },
       "extensions": [
+        "charliermarsh.ruff",
+        "eamodio.gitlens",
+        "GitHub.copilot",
         "kevinrose.vsc-python-indent",
         "ms-python.python",
         "ms-python.vscode-pylance",
         "njpwerner.autodocstring",
         "oderwat.indent-rainbow",
         "twixes.pypi-assistant",
-        "VisualStudioExptTeam.vscodeintellicode",
-        "charliermarsh.ruff"
+        "VisualStudioExptTeam.vscodeintellicode"
       ]
     }
   },
