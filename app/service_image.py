@@ -96,9 +96,9 @@ def handle_image_message(event):
         result_url = result["url"]
         send_image(event, result_url)
 
-    # elif previous_text == '6':
-    #     result              = person_detection(cfg.AIFORTHAI_APIKEY,'image.jpg')
-    #     send_image(event, result)
+    elif previous_text == "6":
+        result = person_detection(cfg.AIFORTHAI_APIKEY, "image.jpg")
+        send_image(event, result)
 
     else:
         send_message(event, "Please type the number first")

@@ -92,7 +92,7 @@ def handle_voice_message(event):
     text = callPartii("received_audio.wav")
 
     # Call partii4 or partii5 in Python package
-    # result  = partii4.transcribe('received_audio.wav', return_json=True)
+    # text = partii4.transcribe("received_audio.wav", return_json=True)
     # text = result['message']
     send_message(event, str(text))
 
@@ -273,7 +273,7 @@ def handle_text_message(event):
 
         elif matched_command == "#vajatts":
             speaker = 0  # [0=เสียงผู้ชาย, 1=เสียงผู้หญิง, 2=เด็กผู้ชาย, 3=เด็กผู้หญิง]
-            tts.convert(event.message.text, cfg.DIR_FILE + cfg.WAV_FILE, speaker=speaker)
+            tts.convert(content, cfg.DIR_FILE + cfg.WAV_FILE, speaker=speaker)
 
             audio_url = cfg.WAV_URL + cfg.DIR_FILE + cfg.WAV_FILE
             audio_duration = get_wav_duration_in_ms(cfg.DIR_FILE + cfg.WAV_FILE)
@@ -284,7 +284,7 @@ def handle_text_message(event):
             send_audio_message(event, audio_message)
 
         elif matched_command == "#tts":
-            speaker = 0
+            speaker = 3
             response = callVaja9(content, speaker)
             # print(response.text)
             if response.json()["msg"] == "success":
