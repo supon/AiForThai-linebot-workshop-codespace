@@ -36,7 +36,6 @@ RUN ARCH=$(uname -m) \
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
-ENV PROJECT_WORKSPACE=/workspaces/aiforthai-linebot-workshop-space
 
 
 ARG USERNAME=aiforthai
@@ -49,15 +48,9 @@ RUN echo ${USERNAME} ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/${USERNAME}
 USER ${USERNAME}
 
 
-#ENV VIRTUAL_ENV=${PROJECT_WORKSPACE}/.venv
 ENV UV_LINK_MODE=copy
 
 ENV ZSH_CUSTOM=/home/${USERNAME}/.oh-my-zsh/custom
-#ENV PATH="${VIRTUAL_ENV}/bin:/home/${USERNAME}/.local/share/uv/tools:${PATH}"
 ENV PATH="/home/${USERNAME}/.local/share/uv/tools:${PATH}"
-
-#WORKDIR ${PROJECT_WORKSPACE}
-
-#ENV PYTHONPATH=${PROJECT_WORKSPACE}/app
 
 EXPOSE 8000
