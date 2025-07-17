@@ -1,152 +1,166 @@
-import requests
-from aift import setting
-from aift.image import super_resolution
-from aift.image.classification import chest_classification, nsfw, violence_classification
-from aift.image.detection import face_blur
-from fastapi import APIRouter, Request
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from fastapi import APIRouter
+from linebot import LineBotApi
 from linebot.models import (
-    ImageMessage,
-    ImageSendMessage,
-    MessageEvent,
-    TextMessage,
-    TextSendMessage,
+    MessageEvent, TextMessage, TextSendMessage,
+    ImageMessage, ImageSendMessage
 )
 
+import requests
+from datetime import datetime
+
+from aift import setting
+from aift.image.detection import face_blur
+from aift.image.classification import chest_classification, violence_classification, nsfw
+from aift.image import super_resolution
+
 from app.configs import Configs
+from app.user_state_store import set_user_state, get_user_state, clear_user_state
 
-router = APIRouter(tags=["Image"], prefix="/image")
-
+router = APIRouter(tags=["Image"])
 cfg = Configs()
 
-setting.set_api_key(cfg.AIFORTHAI_APIKEY)  # AIFORTHAI_APIKEY
-line_bot_api = LineBotApi(cfg.LINE_CHANNEL_ACCESS_TOKEN)  # CHANNEL_ACCESS_TOKEN
-handler = WebhookHandler(cfg.LINE_CHANNEL_SECRET)  # CHANNEL_SECRET
+setting.set_api_key(cfg.AIFORTHAI_APIKEY)
+line_bot_api = LineBotApi(cfg.LINE_CHANNEL_ACCESS_TOKEN)
 
-######### Dictionary to store user's previous text messages #####
-user_messages = {}
+IMAGE_COMMANDS = {
+    '1': 'face_blur',
+    '2': 'chest_classification',
+    '3': 'violence_classification',
+    '4': 'nsfw',
+    '5': 'super_resolution',
+    '6': 'person detection',
+    '7': 'caption generation'
+}
 
+# ✅ Main event handler
+async def handle_event(event):
+    if isinstance(event.message, TextMessage):
+        await handle_text(event)
+    elif isinstance(event.message, ImageMessage):
+        await handle_image(event)
 
-@router.post("")
-async def image_demo(request: Request):
-    """
-    Line Webhook endpoint สำหรับรับข้อความและรูปภาพจาก Line Messaging API และประมวลผลด้วย AI FOR THAI
+# ✅ Text handler (for #img and selecting 1–5)
+async def handle_text(event):
+    user_id = event.source.user_id
+    user_input = event.message.text.strip()
 
-    ฟังก์ชันนี้ทำหน้าที่:
-    1. รับ HTTP POST Request จาก Line Webhook
-    2. ตรวจสอบลายเซ็น (X-Line-Signature) เพื่อยืนยันความถูกต้องของข้อความ
-    3. ส่งข้อความไปยัง handler เพื่อประมวลผลอีเวนต์ที่ได้รับ
-    4. รองรับการประมวลผลข้อความ (TextMessage) และรูปภาพ (ImageMessage):
-        - สำหรับข้อความ (TextMessage): ใช้ข้อความเพื่อเลือกโมเดล AI เช่น Face Blur, Chest X-Ray Classification, NSFW Detection เป็นต้น
-        - สำหรับรูปภาพ (ImageMessage): ประมวลผลรูปภาพด้วยโมเดล AI ที่เลือกไว้ และส่งผลลัพธ์กลับไปยังผู้ใช้
-    """
-    signature = request.headers["X-Line-Signature"]
-    body = await request.body()
-    try:
-        handler.handle(body.decode("UTF-8"), signature)
-    except InvalidSignatureError:
-        print("Invalid signature. Please check your channel access token or channel secret.")
-    return "OK"
+    # Step 1: User enters #img
+    if user_input == "#img":
+        set_user_state(user_id, "image_mode")
+        send_message(event, (
+            "🖼️ กรุณาเลือกบริการประมวลผลภาพ:\n"
+            "1. Face Blur\n"
+            "2. Chest X-Ray\n"
+            "3. Violence Detection\n"
+            "4. NSFW Detection\n"
+            "5. Super Resolution\n"
+            "6. Person Detection\n"
+            "7. Caption Generation"
+        ))
+        return
 
+    # Step 2: User selects model 1-5
+    current_state = get_user_state(user_id)
 
-@handler.add(MessageEvent, message=TextMessage)
-def handle_text_message(event):
-    user_messages[event.source.user_id] = event.message.text
+    if not current_state and user_input in IMAGE_COMMANDS:
+        send_message(event, "⏱ หมดเวลา 3 นาทีแล้ว กรุณาพิมพ์ #img เพื่อเริ่มใหม่อีกครั้ง")
+        return
 
-    text = "Welcome to AIFT-CV model demo, please type following number \n to select the model \n 1.face_blur \n 2.chestXray \n 3.Violent \n 4.NFSW \n 5.Super_resolution"
+    if current_state == "image_mode" and user_input in IMAGE_COMMANDS:
+        set_user_state(user_id, f"image_{user_input}")
+        send_message(event, f"✅ เลือกบริการ: {IMAGE_COMMANDS[user_input]} แล้ว กรุณาส่งภาพเข้ามา")
+    else:
+        send_message(event, "⚠️ กรุณาพิมพ์ #img เพื่อเริ่มใช้งานบริการวิเคราะห์ภาพ")
 
-    # return text response
-    send_message(event, text)
+# ✅ Image handler
+async def handle_image(event):
+    user_id = event.source.user_id
+    selected_state = get_user_state(user_id)
 
+    if not selected_state or not selected_state.startswith("image_"):
+        send_message(event, "⚠️ ยังไม่ได้เลือกบริการ หรือหมดเวลา กรุณาพิมพ์ #img และเลือกบริการก่อนส่งภาพ")
+        return
 
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image_message(event):
-    message_id = event.message.id
-    image_content = line_bot_api.get_message_content(message_id)
+    service_code = selected_state.split("_")[1]
 
-    # Save the image locally and process it XXXs
-    with open("image.jpg", "wb") as f:
+    image_content = line_bot_api.get_message_content(event.message.id)
+    image_path = "image.jpg"
+    with open(image_path, "wb") as f:
         for chunk in image_content.iter_content():
             f.write(chunk)
 
-    #### Extract previous text messages from user adasd###
-    user_id = event.source.user_id
-    previous_text = user_messages.get(user_id)
-    previous_text = str(previous_text)
+    try:
+        if service_code == '1':
+            result = face_blur.analyze(image_path)
+            send_image(event, convert_http_to_https(result['URL']))
+        elif service_code == '2':
+            result = chest_classification.analyze(image_path, return_json=False)
+            send_message(event, result[0]['result'])
+        elif service_code == '3':
+            result = violence_classification.analyze(image_path)
+            send_message(event, result['objects'][0]['result'])
+        elif service_code == '4':
+            result = nsfw.analyze(image_path)
+            send_message(event, result['objects'][0]['result'])
+        elif service_code == '5':
+            result = super_resolution.analyze(image_path)
+            send_image(event, convert_http_to_https(result['url']))
+        elif service_code == '6':
+            result = person_detection(image_path)
+            send_image(event, convert_http_to_https(result))
+        elif service_code == '7':
+            result = capgen(image_path)
+            send_message(event, str(result))
+        else:
+            send_message(event, "⚠️ ไม่พบบริการที่เลือก")
+    except Exception as e:
+        send_message(event, f"❗เกิดข้อผิดพลาด: {str(e)}")
 
-    if previous_text == "1":
-        result = face_blur.analyze("image.jpg")
-        result_url = result["URL"]
-        send_image(event, result_url)
-    elif previous_text == "2":
-        result = chest_classification.analyze("image.jpg", return_json=False)
-        result_text = result[0]["result"]
-        send_message(event, result_text)
-    elif previous_text == "3":
-        result = violence_classification.analyze("image.jpg")
-        result_text = result["objects"][0]["result"]
-        send_message(event, result_text)
-    elif previous_text == "4":
-        result = nsfw.analyze("image.jpg")
-        result_text = result["objects"][0]["result"]
-        send_message(event, result_text)
-    elif previous_text == "5":
-        result = super_resolution.analyze("image.jpg")
-        result_url = result["url"]
-        send_image(event, result_url)
+    # 🔚 Clear user state after successful image processing
+    clear_user_state(user_id)
 
-    elif previous_text == "6":
-        result = person_detection(cfg.AIFORTHAI_APIKEY, "image.jpg")
-        send_image(event, result)
-
-    else:
-        send_message(event, "Please type the number first")
-
-
-def echo(event):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=event.message.text))
-
-
-# function for sending message
+# ✅ Utility: Send text message
 def send_message(event, message):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
 
-
-## function for sending result
+# ✅ Utility: Send image
 def send_image(event, image_url):
     line_bot_api.reply_message(
         event.reply_token,
-        ImageSendMessage(original_content_url=image_url, preview_image_url=image_url),
+        ImageSendMessage(original_content_url=image_url, preview_image_url=image_url)
     )
 
-
-##### function for convert http into https ####
+# ✅ Utility: Convert HTTP → HTTPS
 def convert_http_to_https(url):
-    """
-       Converts a given URL from HTTP to HTTPS.
-
-    Args:
-      url: The URL string to be converted.
-
-    Returns:
-      The URL string with "http://" replaced by "https://".
-      If the URL already starts with "https://", it remains unchanged.
-    """
     if url.startswith("http://"):
         return url.replace("http://", "https://", 1)
-    else:
-        return url
-
+    return url
 
 #### function for person detection api for aiforthai ####
-def person_detection(AIFORTHAI_APIKEY, image_dir):
-    url = "https://api.aiforthai.in.th/person/human_detect/"
+def person_detection(image_dir):
+    url = cfg.URL_PERSON_DETEC
     files = {"src_img": open(image_dir, "rb")}  ### input image dir here ###
     data = {"json_export": "true", "img_export": "true"}
-    headers = {"Apikey": AIFORTHAI_APIKEY}
+    headers = {"Apikey": cfg.AIFORTHAI_APIKEY}
 
     response = requests.post(url, files=files, headers=headers, data=data)
     response = response.json()["human_img"]
     response = convert_http_to_https(response)
     return response
+
+### function for Image Caption
+def capgen(img_path):
+    url =cfg.URL_CAPGEN
+ 
+    headers = {'Apikey':cfg.AIFORTHAI_APIKEY}
+    
+    payload = {}
+    files=[
+    ('file',(img_path,open(img_path,'rb'),'image/jpeg'))
+    ]
+    
+    response = requests.request("POST", url, headers=headers, data=payload, files=files)
+    
+    # print(response.json())
+    return(response.json()["caption"] )
+
